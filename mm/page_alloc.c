@@ -2356,9 +2356,9 @@ gfp_to_alloc_flags(gfp_t gfp_mask)
 		alloc_flags |= ALLOC_HARDER;
 
 	if (likely(!(gfp_mask & __GFP_NOMEMALLOC))) {
-		if (!in_interrupt() &&
-		    ((current->flags & PF_MEMALLOC) ||
-		     unlikely(test_thread_flag(TIF_MEMDIE))))
+		if (gfp_mask & __GFP_MEMALLOC)
+			alloc_flags |= ALLOC_NO_WATERMARKS;
+		else if (likely(!(gfp_mask & __GFP_NOMEMALLOC)) && !in_interrupt())
 			alloc_flags |= ALLOC_NO_WATERMARKS;
 	}
 #ifdef CONFIG_CMA
@@ -2366,6 +2366,11 @@ gfp_to_alloc_flags(gfp_t gfp_mask)
 		alloc_flags |= ALLOC_CMA;
 #endif
 	return alloc_flags;
+}
+
+bool gfp_pfmemalloc_allowed(gfp_t gfp_mask)
+{
+	return !!(gfp_to_alloc_flags(gfp_mask) & ALLOC_NO_WATERMARKS);
 }
 
 static inline struct page *
@@ -2453,7 +2458,6 @@ rebalance:
 	if (test_thread_flag(TIF_MEMDIE) && !(gfp_mask & __GFP_NOFAIL))
 		goto nopage;
 
-#ifdef CONFIG_DIRECT_RECLAIM_ALLOW_COMPACTION
 	/*
 	 * Try direct compaction. The first pass is asynchronous. Subsequent
 	 * attempts after direct reclaim are synchronous
@@ -2467,7 +2471,6 @@ rebalance:
 					&did_some_progress);
 	if (page)
 		goto got_pg;
-#endif /* CONFIG_DIRECT_RECLAIM_ALLOW_COMPACTION */
 	sync_migration = true;
 
 	/*
@@ -2557,10 +2560,18 @@ nopage:
 	warn_alloc_failed(gfp_mask, order, NULL);
 	return page;
 got_pg:
+	/*
+	 * page->pfmemalloc is set when the caller had PFMEMALLOC set, is
+	 * been OOM killed or specified __GFP_MEMALLOC. The expectation is
+	 * that the caller is taking steps that will free more memory. The
+	 * caller should avoid the page being used for !PFMEMALLOC purposes.
+	 */
+	page->pfmemalloc = !!(alloc_flags & ALLOC_NO_WATERMARKS);
+
 	if (kmemcheck_enabled)
 		kmemcheck_pagealloc_alloc(page, order, gfp_mask);
-	return page;
 
+	return page;
 }
 
 /*
@@ -2616,6 +2627,8 @@ retry_cpuset:
 		page = __alloc_pages_slowpath(gfp_mask, order,
 				zonelist, high_zoneidx, nodemask,
 				preferred_zone, migratetype);
+	else
+		page->pfmemalloc = false;
 
 	trace_mm_page_alloc(page, order, gfp_mask, migratetype);
 
@@ -5277,7 +5290,6 @@ void setup_per_zone_wmarks(void)
  */
 static void __meminit calculate_zone_inactive_ratio(struct zone *zone)
 {
-#ifndef CONFIG_ZSWAP
 	unsigned int gb, ratio;
 
 	/* Zone size in gigabytes */
@@ -5288,9 +5300,6 @@ static void __meminit calculate_zone_inactive_ratio(struct zone *zone)
 		ratio = 1;
 
 	zone->inactive_ratio = ratio;
-#else
-	zone->inactive_ratio = 1;
-#endif
 }
 
 static void __meminit setup_per_zone_inactive_ratio(void)
