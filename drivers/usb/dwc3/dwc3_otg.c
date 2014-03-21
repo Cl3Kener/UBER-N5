@@ -572,6 +572,25 @@ static int dwc3_otg_set_power(struct usb_phy *phy, unsigned mA)
 	if (saved_usb_psy)
 		dotg->psy = saved_usb_psy;
 
+#ifdef CONFIG_FORCE_FAST_CHARGE
+	if ((force_fast_charge > 0) &&
+			(fake_charge_ac == FAKE_CHARGE_AC_ENABLE)) {
+		if (dotg->charger->chg_type == DWC3_SDP_CHARGER) {
+			power_supply_set_supply_type(dotg->psy,
+					POWER_SUPPLY_TYPE_USB_DCP);
+			dotg->psy = power_supply_get_by_name("ac");
+			power_supply_set_online(dotg->psy, true);
+			power_supply_set_current_limit(dotg->psy, 1000*mA);
+		} else if (dotg->charger->chg_type == DWC3_INVALID_CHARGER) {
+			power_supply_set_supply_type(dotg->psy,
+					POWER_SUPPLY_TYPE_BATTERY);
+			dotg->psy = power_supply_get_by_name("ac");
+			power_supply_set_online(dotg->psy, false);
+			power_supply_set_current_limit(dotg->psy, 0);
+		}
+	}
+#endif
+
 	power_supply_changed(dotg->psy);
 	dotg->charger->max_power = mA;
 	return 0;
@@ -771,7 +790,10 @@ static void dwc3_otg_sm_work(struct work_struct *w)
 					break;
 				case DWC3_SDP_CHARGER:
 #ifdef CONFIG_FORCE_FAST_CHARGE
-					if (force_fast_charge > 0)
+					if (force_fast_charge > 1)
+						dwc3_otg_set_power(phy,
+							fast_charge_level);
+					else if (force_fast_charge > 0)
 						dwc3_otg_set_power(phy,
 							DWC3_IDEV_CHG_MAX);
 					else

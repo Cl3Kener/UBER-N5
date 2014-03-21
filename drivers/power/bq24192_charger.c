@@ -1071,7 +1071,7 @@ static bool bq24192_is_wlc_bounced(struct bq24192_chip *chip)
 }
 
 #define WLC_INPUT_I_LIMIT_MA 900
-#define USB_MAX_IBAT_MA 1500
+#define USB_MAX_IBAT_MA 2000
 static void bq24192_external_power_changed(struct power_supply *psy)
 {
 	struct bq24192_chip *chip = container_of(psy,
