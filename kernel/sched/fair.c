@@ -596,9 +596,8 @@ int sched_proc_update_handler(struct ctl_table *table, int write,
 static inline unsigned long
 calc_delta_fair(unsigned long delta, struct sched_entity *se)
 {
-	if (unlikely(se->load.weight != NICE_0_LOAD))
-		delta = calc_delta_mine(delta, NICE_0_LOAD, &se->load);
-
+	/* nice? why bother, MAX delta here! */
+	delta = LONG_MAX;
 	return delta;
 }
 
@@ -616,7 +615,8 @@ static u64 __sched_period(unsigned long nr_running)
 	unsigned long nr_latency = sched_nr_latency;
 
 	if (unlikely(nr_running > nr_latency)) {
-		period = sysctl_sched_min_granularity;
+		/* let's give real granularity here */
+		period = 5000000ULL;
 		period *= nr_running;
 	}
 
@@ -1303,17 +1303,36 @@ wakeup_preempt_entity(struct sched_entity *curr, struct sched_entity *se);
  * 3) pick the "last" process, for cache locality
  * 4) do not run the "skip" process, if something else is available
  */
-static struct sched_entity *pick_next_entity(struct cfs_rq *cfs_rq)
+static struct sched_entity *
+pick_next_entity(struct cfs_rq *cfs_rq, struct sched_entity *curr)
 {
-	struct sched_entity *se = __pick_first_entity(cfs_rq);
-	struct sched_entity *left = se;
+	struct sched_entity *left = __pick_first_entity(cfs_rq);
+	struct sched_entity *se;
+
+	/*
+	 * If curr is set we have to see if its left of the leftmost entity
+	 * still in the tree, provided there was anything in the tree at all.
+	 */
+	if (!left || (curr && entity_before(curr, left)))
+		left = curr;
+
+	se = left; /* ideally we run the leftmost entity */
 
 	/*
 	 * Avoid running the skip buddy, if running something else can
 	 * be done without getting too unfair.
 	 */
 	if (cfs_rq->skip == se) {
-		struct sched_entity *second = __pick_next_entity(se);
+		struct sched_entity *second;
+
+		if (se == curr) {
+			second = __pick_first_entity(cfs_rq);
+		} else {
+			second = __pick_next_entity(se);
+			if (!second || (curr && entity_before(curr, second)))
+				second = curr;
+		}
+
 		if (second && wakeup_preempt_entity(second, left) < 1)
 			se = second;
 	}
@@ -1335,7 +1354,7 @@ static struct sched_entity *pick_next_entity(struct cfs_rq *cfs_rq)
 	return se;
 }
 
-static void check_cfs_rq_runtime(struct cfs_rq *cfs_rq);
+static bool check_cfs_rq_runtime(struct cfs_rq *cfs_rq);
 
 static void put_prev_entity(struct cfs_rq *cfs_rq, struct sched_entity *prev)
 {
@@ -1983,22 +2002,23 @@ static void check_enqueue_throttle(struct cfs_rq *cfs_rq)
 }
 
 /* conditionally throttle active cfs_rq's from put_prev_entity() */
-static void check_cfs_rq_runtime(struct cfs_rq *cfs_rq)
+static bool check_cfs_rq_runtime(struct cfs_rq *cfs_rq)
 {
 	if (!cfs_bandwidth_used())
-		return;
+		return false;
 
 	if (likely(!cfs_rq->runtime_enabled || cfs_rq->runtime_remaining > 0))
-		return;
+		return false;
 
 	/*
 	 * it's possible for a throttled entity to be forced into a running
 	 * state (e.g. set_curr_task), in this case we're finished.
 	 */
 	if (cfs_rq_throttled(cfs_rq))
-		return;
+		return true;
 
 	throttle_cfs_rq(cfs_rq);
+	return true;
 }
 
 static inline u64 default_cfs_period(void);
@@ -2108,7 +2128,7 @@ static void unthrottle_offline_cfs_rqs(struct rq *rq)
 #else /* CONFIG_CFS_BANDWIDTH */
 static __always_inline
 void account_cfs_rq_runtime(struct cfs_rq *cfs_rq, unsigned long delta_exec) {}
-static void check_cfs_rq_runtime(struct cfs_rq *cfs_rq) {}
+static bool check_cfs_rq_runtime(struct cfs_rq *cfs_rq) { return false; }
 static void check_enqueue_throttle(struct cfs_rq *cfs_rq) {}
 static __always_inline void return_cfs_rq_runtime(struct cfs_rq *cfs_rq) {}
 
@@ -3052,20 +3072,28 @@ preempt:
 
 static struct task_struct *pick_next_task_fair(struct rq *rq)
 {
-	struct task_struct *p;
 	struct cfs_rq *cfs_rq = &rq->cfs;
 	struct sched_entity *se;
+	struct task_struct *p;
+
+#ifdef CONFIG_FAIR_GROUP_SCHED
+	if (!cfs_rq->nr_running)
+		return NULL;
+
+	cfs_rq = &rq->cfs;
+#endif
 
 	if (!cfs_rq->nr_running)
 		return NULL;
 
 	do {
-		se = pick_next_entity(cfs_rq);
+		se = pick_next_entity(cfs_rq, NULL);
 		set_next_entity(cfs_rq, se);
 		cfs_rq = group_cfs_rq(se);
 	} while (cfs_rq);
 
 	p = task_of(se);
+
 	if (hrtick_enabled(rq))
 		hrtick_start_fair(rq, p);
 
@@ -4387,7 +4415,7 @@ find_busiest_queue(struct sched_domain *sd, struct sched_group *group,
 	unsigned long max_load = 0;
 	int i;
 
-	for_each_cpu(i, sched_group_cpus(group)) {
+	for_each_cpu_and(i, sched_group_cpus(group), cpus) {
 		unsigned long power = power_of(i);
 		unsigned long capacity = DIV_ROUND_CLOSEST(power,
 							   SCHED_POWER_SCALE);
@@ -4395,9 +4423,6 @@ find_busiest_queue(struct sched_domain *sd, struct sched_group *group,
 
 		if (!capacity)
 			capacity = fix_small_capacity(sd, group);
-
-		if (!cpumask_test_cpu(i, cpus))
-			continue;
 
 		rq = cpu_rq(i);
 		wl = weighted_cpuload(i);
