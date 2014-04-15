@@ -231,7 +231,7 @@ static struct workqueue_struct *bam_mux_rx_workqueue;
 static struct workqueue_struct *bam_mux_tx_workqueue;
 
 /* A2 power collaspe */
-#define UL_TIMEOUT_DELAY 300	/* in ms */
+#define UL_TIMEOUT_DELAY 1000	/* in ms */
 #define ENABLE_DISCONNECT_ACK	0x1
 #define SHUTDOWN_TIMEOUT_MS	500
 #define UL_WAKEUP_TIMEOUT_MS	2000
@@ -1603,11 +1603,7 @@ static void ul_timeout(struct work_struct *work)
 			ul_packet_written = 0;
 			schedule_delayed_work(&ul_timeout_work,
 					msecs_to_jiffies(UL_TIMEOUT_DELAY));
-                } else if(polling_mode) {
-                        DMUX_LOG_KERR("%s: BAM is in polling mode, delay UL power down", __func__);
-                        schedule_delayed_work(&ul_timeout_work,
-                                       msecs_to_jiffies(UL_TIMEOUT_DELAY));
-                } else {
+		} else {
 			ul_powerdown();
 		}
 	}
@@ -1629,10 +1625,8 @@ static int ssrestart_check(void)
 								__func__);
 	in_global_reset = 1;
 	ret = subsystem_restart("modem");
-	if (ret == -ENODEV) {
-		DMUX_LOG_KERR("%s: modem subsystem restart failed\n", __func__);
-		BUG();
-	}
+	if (ret == -ENODEV)
+		panic("modem subsystem restart failed\n");
 	return 1;
 }
 

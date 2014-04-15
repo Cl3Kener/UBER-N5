@@ -48,10 +48,20 @@ struct wcd9xxx_reg_mask_val {
 	u8	val;
 };
 
+enum ncp_fclk_level {
+	NCP_FCLK_LEVEL_8,
+	NCP_FCLK_LEVEL_5,
+	NCP_FCLK_LEVEL_MAX,
+};
+
 /* Class H data that the codec driver will maintain */
 struct wcd9xxx_clsh_cdc_data {
 	u8 state;
 	int buck_mv;
+	bool is_dynamic_vdd_cp;
+	int clsh_users;
+	int buck_users;
+	int ncp_users[NCP_FCLK_LEVEL_MAX];
 	struct wcd9xxx_resmgr *resmgr;
 };
 
@@ -72,6 +82,9 @@ extern void wcd9xxx_clsh_fsm(struct snd_soc_codec *codec,
 
 extern void wcd9xxx_clsh_init(struct wcd9xxx_clsh_cdc_data *clsh,
 			      struct wcd9xxx_resmgr *resmgr);
+
+extern void wcd9xxx_clsh_imped_config(struct snd_soc_codec *codec,
+				  int imped);
 
 enum wcd9xxx_codec_event {
 	WCD9XXX_CODEC_EVENT_CODEC_UP = 0,

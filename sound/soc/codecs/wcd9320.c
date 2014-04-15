@@ -1456,6 +1456,32 @@ static const struct snd_kcontrol_new taiko_2_x_analog_gain_controls[] = {
 			analog_gain),
 };
 
+static int taiko_hph_impedance_get(struct snd_kcontrol *kcontrol,
+				   struct snd_ctl_elem_value *ucontrol)
+{
+	uint32_t zl, zr;
+	bool hphr;
+	struct soc_multi_mixer_control *mc;
+	struct snd_soc_codec *codec = snd_kcontrol_chip(kcontrol);
+	struct taiko_priv *priv = snd_soc_codec_get_drvdata(codec);
+
+	mc = (struct soc_multi_mixer_control *)(kcontrol->private_value);
+
+	hphr = mc->shift;
+	wcd9xxx_mbhc_get_impedance(&priv->mbhc, &zl, &zr);
+	pr_debug("%s: zl %u, zr %u\n", __func__, zl, zr);
+	ucontrol->value.integer.value[0] = hphr ? zr : zl;
+
+	return 0;
+}
+
+static const struct snd_kcontrol_new impedance_detect_controls[] = {
+	SOC_SINGLE_EXT("HPHL Impedance", 0, 0, UINT_MAX, 0,
+		       taiko_hph_impedance_get, NULL),
+	SOC_SINGLE_EXT("HPHR Impedance", 0, 1, UINT_MAX, 0,
+		       taiko_hph_impedance_get, NULL),
+};
+
 static const char * const rx_mix1_text[] = {
 	"ZERO", "SRC1", "SRC2", "IIR1", "IIR2", "RX1", "RX2", "RX3", "RX4",
 		"RX5", "RX6", "RX7"
@@ -3068,6 +3094,8 @@ static int taiko_hphl_dac_event(struct snd_soc_dapm_widget *w,
 {
 	struct snd_soc_codec *codec = w->codec;
 	struct taiko_priv *taiko_p = snd_soc_codec_get_drvdata(codec);
+	uint32_t impedl, impedr;
+	int ret = 0;
 
 	pr_debug("%s %s %d\n", __func__, w->name, event);
 
@@ -3079,6 +3107,13 @@ static int taiko_hphl_dac_event(struct snd_soc_dapm_widget *w,
 						 WCD9XXX_CLSH_STATE_HPHL,
 						 WCD9XXX_CLSH_REQ_ENABLE,
 						 WCD9XXX_CLSH_EVENT_PRE_DAC);
+		ret = wcd9xxx_mbhc_get_impedance(&taiko_p->mbhc,
+					&impedl, &impedr);
+		if (!ret)
+			wcd9xxx_clsh_imped_config(codec, impedl);
+		else
+			dev_err(codec->dev, "Failed to get mbhc impedance %d\n",
+						ret);
 		break;
 	case SND_SOC_DAPM_POST_PMD:
 		snd_soc_update_bits(codec, TAIKO_A_CDC_CLK_RDAC_CLK_EN_CTL,
@@ -5987,7 +6022,7 @@ static const struct wcd9xxx_reg_mask_val taiko_2_0_reg_defaults[] = {
 	TAIKO_REG_VAL(TAIKO_A_CDC_TX_5_6_ADC_IB, 0x44),
 	TAIKO_REG_VAL(WCD9XXX_A_BUCK_MODE_3, 0xCE),
 	TAIKO_REG_VAL(WCD9XXX_A_BUCK_CTRL_VCL_1, 0x8),
-	TAIKO_REG_VAL(WCD9XXX_A_BUCK_CTRL_CCL_4, 0x51),
+	TAIKO_REG_VAL(TAIKO_A_BUCK_CTRL_CCL_4, 0x51),
 	TAIKO_REG_VAL(TAIKO_A_NCP_DTEST, 0x10),
 	TAIKO_REG_VAL(TAIKO_A_RX_HPH_CHOP_CTL, 0xA4),
 	TAIKO_REG_VAL(TAIKO_A_RX_HPH_BIAS_PA, 0x7A),
@@ -6452,6 +6487,8 @@ static int taiko_codec_probe(struct snd_soc_codec *codec)
 	}
 
 	taiko->clsh_d.buck_mv = taiko_codec_get_buck_mv(codec);
+	/* Taiko does not support dynamic switching of vdd_cp */
+	taiko->clsh_d.is_dynamic_vdd_cp = false;
 	wcd9xxx_clsh_init(&taiko->clsh_d, &taiko->resmgr);
 
 	if (TAIKO_IS_1_0(core->version))
@@ -6552,6 +6589,9 @@ static int taiko_codec_probe(struct snd_soc_codec *codec)
 			taiko_2_x_analog_gain_controls,
 			ARRAY_SIZE(taiko_2_x_analog_gain_controls));
 	}
+
+	snd_soc_add_codec_controls(codec, impedance_detect_controls,
+				   ARRAY_SIZE(impedance_detect_controls));
 
 	control->num_rx_port = TAIKO_RX_MAX;
 	control->rx_chs = ptr;
