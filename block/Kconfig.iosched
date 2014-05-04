@@ -92,6 +92,12 @@ config CFQ_GROUP_IOSCHED
 	---help---
 	  Enable group IO scheduling in CFQ.
 
+config IOSCHED_TRIPNDROID
+	tristate "Tripndroid"
+	default y
+	---help---
+	  The Trip N Droid scheduler
+
 config IOSCHED_BFQ
 	tristate "BFQ I/O scheduler"
 	depends on EXPERIMENTAL
@@ -113,12 +119,6 @@ config CGROUP_BFQIO
 	  Enable hierarchical scheduling in BFQ, using the cgroups
 	  filesystem interface.  The name of the subsystem will be
 	  bfqio.
-
-config IOSCHED_TRIPNDROID
-	tristate "Tripndroid"
-	default y
-	---help---
-	  The Trip N Droid scheduler
 
 choice
 	prompt "Default I/O scheduler"
