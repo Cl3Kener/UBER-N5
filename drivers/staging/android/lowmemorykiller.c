@@ -303,6 +303,12 @@ static int lowmem_shrink(struct shrinker *s, struct shrink_control *sc)
 	int other_file;
 	unsigned long nr_to_scan = sc->nr_to_scan;
 
+	tsk = current->group_leader;
+	if ((tsk->flags & PF_EXITING) && test_task_flag(tsk, TIF_MEMDIE)) {
+		set_tsk_thread_flag(current, TIF_MEMDIE);
+		return 0;
+	}
+
 	if (nr_to_scan > 0) {
 		if (mutex_lock_interruptible(&scan_mutex) < 0)
 			return 0;
@@ -373,7 +379,11 @@ static int lowmem_shrink(struct shrinker *s, struct shrink_control *sc)
 			if (test_task_flag(tsk, TIF_MEMDIE)) {
 				rcu_read_unlock();
 				/* give the system time to free up the memory */
-				msleep_interruptible(20);
+				if (!same_thread_group(current, tsk))
+					msleep_interruptible(20);
+				else
+					set_tsk_thread_flag(current,
+								TIF_MEMDIE);
 				mutex_unlock(&scan_mutex);
 				return 0;
 			}
@@ -391,6 +401,13 @@ static int lowmem_shrink(struct shrinker *s, struct shrink_control *sc)
 #else
 			continue;
 #endif
+		}
+		if (fatal_signal_pending(p) ||
+				((p->flags & PF_EXITING) &&
+					test_tsk_thread_flag(p, TIF_MEMDIE))) {
+			lowmem_print(2, "skip slow dying process %d\n", p->pid);
+			task_unlock(p);
+			continue;
 		}
 		tasksize = get_mm_rss(p->mm);
 		task_unlock(p);
@@ -483,16 +500,43 @@ static struct power_suspend low_mem_suspend = {
 	.resume = low_mem_late_resume,
 };
 
+#ifdef CONFIG_ANDROID_BG_SCAN_MEM
+static int lmk_task_migration_notify(struct notifier_block *nb,
+					unsigned long data, void *arg)
+{
+	struct shrink_control sc = {
+		.gfp_mask = GFP_KERNEL,
+		.nr_to_scan = 1,
+	};
+
+	lowmem_shrink(&lowmem_shrinker, &sc);
+
+	return NOTIFY_OK;
+}
+
+static struct notifier_block tsk_migration_nb = {
+	.notifier_call = lmk_task_migration_notify,
+};
+#endif
+
 static int __init lowmem_init(void)
 {
 	register_shrinker(&lowmem_shrinker);
 	register_power_suspend(&low_mem_suspend);
+#ifdef CONFIG_ANDROID_BG_SCAN_MEM
+	raw_notifier_chain_register(&bgtsk_migration_notifier_head,
+					&tsk_migration_nb);
+#endif
 	return 0;
 }
 
 static void __exit lowmem_exit(void)
 {
 	unregister_shrinker(&lowmem_shrinker);
+#ifdef CONFIG_ANDROID_BG_SCAN_MEM
+	raw_notifier_chain_unregister(&bgtsk_migration_notifier_head,
+					&tsk_migration_nb);
+#endif
 }
 
 #ifdef CONFIG_ANDROID_LOW_MEMORY_KILLER_AUTODETECT_OOM_ADJ_VALUES
